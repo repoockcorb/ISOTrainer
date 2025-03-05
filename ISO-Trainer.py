@@ -102,6 +102,19 @@ class MyInterface:
 
         self.setup_ui()
 
+        # Data for plotting
+        self.plot_data_ch0 = []
+        self.plot_data_ch1 = []
+        self.plot_combined = []
+        self.plot_timestamps = []
+        self.plot_window = None
+        self.plot_active = False
+        self.max_plot_points = 250  # Maximum number of points to show on plot
+        self.pyqt_app = None
+        self.pyqt_plot_window = None
+        self.target_value = 0.0  # Default target value for the horizontal line
+        self.scroll_time = 5.0  # Scrolling window in seconds
+
     
     def setup_ui(self):
         
@@ -198,7 +211,7 @@ class MyInterface:
         pywinstyles.set_opacity(participants_ID_frame, color="#000001") # just add this line
         participants_ID_frame.place(x=110, y=250)
 
-        self.participants_ID = ctk.CTkEntry(participants_ID_frame, width=310, placeholder_text="Participants ID (Output File Prefix)", border_color="black")
+        self.participants_ID = ctk.CTkEntry(participants_ID_frame, width=155+55, placeholder_text="Participants ID (Output File Prefix)", border_color="black")
         self.participants_ID.grid(row=0, column=0, padx=5, pady=5)
 
 
@@ -264,6 +277,29 @@ class MyInterface:
                                                progress_color="#28a745")
         self.auto_start_switch.grid(row=0, column=1, padx=5, pady=5)
 
+        # Create frame for target value input
+        target_frame = ctk.CTkFrame(self.master, bg_color="#000001", fg_color="#000001")
+        pywinstyles.set_opacity(target_frame, color="#000001")
+        target_frame.place(x=110+165+50, y=250)  # Position below auto/manual mode frame
+
+        # participants_ID_frame.place(x=110, y=250)
+
+        # Create target value input
+        self.target_value_var = ctk.StringVar(value="0.0")
+        self.target_value_entry = ctk.CTkEntry(target_frame, width=95, placeholder_text="Target (Kg)", border_color='black', textvariable=self.target_value_var)
+        self.target_value_entry.grid(row=0, column=0, padx=5, pady=5)
+        
+        # Add validation for target value (numbers only)
+        self.target_value_var.trace_add("write", self.validate_target_value)
+        
+        # # Create label for target value
+        # target_label = ctk.CTkLabel(target_frame, 
+        #                            text="Target Value", 
+        #                            width=100, 
+        #                            bg_color="#000001", 
+        #                            font=("Arial", 12, "bold"), 
+        #                            text_color="white")
+        # target_label.grid(row=0, column=1, padx=5, pady=5)
 
         # Create four buttons stacked vertically
         button_names = ["Connect", "Start Logging", "Stop Logging", "Reset", "Tare"]
@@ -499,6 +535,22 @@ class MyInterface:
         # Update the correct UI label
         self.weight_readings_labels[label_index].configure(text=f"Weight {channel_id}\n{display_kg:.1f} Kg")
 
+        # Store data for plotting if plot is active
+        if self.plot_active:
+            if channel_id == 0:
+                self.plot_data_ch0.append(display_kg)
+                # Only add timestamp once (for channel 0)
+                self.plot_timestamps.append(datetime.now())
+                # Limit the number of points
+                if len(self.plot_data_ch0) > self.max_plot_points:
+                    self.plot_data_ch0.pop(0)
+                    self.plot_timestamps.pop(0)
+            elif channel_id == 1:
+                self.plot_data_ch1.append(display_kg)
+                # Limit the number of points
+                if len(self.plot_data_ch1) > self.max_plot_points:
+                    self.plot_data_ch1.pop(0)
+
         return weight_grams
 
 
@@ -707,8 +759,9 @@ class MyInterface:
             total_time = None  # Infinite logging
             self.countdown_label.configure(text="Timer\n♾️")
 
-        self.logging_active = False  # Initially set to False (to wait for weight threshold)
+        # Reset flags to ensure clean state
         self.live_update_flag = True
+        self.logging_active = False  # Initially set to False (to wait for weight threshold)
 
         # If manual logging, start immediately; otherwise, wait for threshold
         if auto_start:
@@ -765,9 +818,14 @@ class MyInterface:
                     timestamp = timestamp + 0.2
 
                     # Write to CSV
-                    with open(file_name, mode="a", newline="") as file:
-                        writer = csv.writer(file)
-                        writer.writerow([timestamp, weight_0, weight_1, weight_0 + weight_1])
+                    try:
+                        with open(file_name, mode="a", newline="") as file:
+                            writer = csv.writer(file)
+                            writer.writerow([timestamp, weight_0, weight_1, weight_0 + weight_1])
+                    except Exception as e:
+                        self.update_terminal(f"Error writing to log file: {str(e)}\n")
+                        self.logging_active = False
+                        break
 
                     # Update UI countdown
                     if total_time is not None:  # If countdown is active
@@ -810,12 +868,19 @@ class MyInterface:
         self.participants_ID.configure(state="normal")
         self.auto_trigger.configure(state="normal")
 
-        if self.logging_active:
-            self.logging_active = False
-            self.live_update_flag = False
-            self.update_terminal("Logging manually stopped.\n")
-        else:
-            self.update_terminal("No active logging session.\n")
+        # First set logging_active to False to signal the log_loop to stop writing data
+        self.logging_active = False
+        
+        # Give a small delay to allow any in-progress writes to complete
+        time.sleep(0.3)
+        
+        # Then set live_update_flag to False to exit the log_loop thread
+        self.live_update_flag = False
+        
+        self.update_terminal("Logging manually stopped.\n")
+        
+        # Reset the countdown display
+        self.countdown_label.configure(text="Timer\n0")
 
 
     def get_current_weight(self, channel_id):
@@ -875,39 +940,39 @@ class MyInterface:
         self.weight_readings_labels[0].configure(text=f"Weight 0\n0.0 Kg")
         self.weight_readings_labels[1].configure(text=f"Weight 1\n0.0 Kg")
 
-
-        self.live_update_flag = False  # Reset live update flag
+        # First set logging_active to False
+        self.logging_active = False
+        
+        # Then set live_update_flag to False to stop any running threads
+        self.live_update_flag = False
+        
+        # Give a small delay to allow threads to exit
+        time.sleep(0.3)
+        
         self.record_time_flag = False
-
         self.connected_flag = False
-
         
-        # Stop logging
-        self.stop_logging()
-
-        
-        # Clear terminal
-        self.clear_terminal()
-
-        self.live_update_flag = True  # Reset live update flag
-
-
+        # Reset UI elements
         self.runtime_entry.delete(0,100)
         self.auto_trigger.delete(0,100)
         self.participants_ID.delete(0,100)
-
-
 
         self.runtime_entry.configure(placeholder_text="RunTime (seconds)")
         self.auto_trigger.configure(placeholder_text="Trigger Weight (Kg)")
         self.participants_ID.configure(placeholder_text="Participants ID (Output File Prefix)")
         self.countdown_label.configure(text=f"Timer\n0")
-
     
         self.runtime_entry.configure(state="normal")
         self.auto_start_switch.configure(state="normal")
         self.participants_ID.configure(state="normal")
         self.auto_trigger.configure(state="normal")
+        
+        # Clear terminal again
+        self.clear_terminal()
+        
+        # Now that everything is reset, we can set live_update_flag back to True
+        # for normal operation
+        self.live_update_flag = True
 
 
     def clear_terminal(self):
@@ -925,8 +990,16 @@ class MyInterface:
         response = msg.get()
         
         if response=="Yes":
+            # First set logging_active to False to stop any active logging
+            self.logging_active = False
+            
+            # Then set live_update_flag to False to stop any running threads
             self.live_update_flag = False
             
+            # Give a small delay to allow threads to exit
+            time.sleep(0.3)
+            
+            # Now reset and destroy
             self.reset_display()
             self.master.destroy()  
 
@@ -959,6 +1032,269 @@ class MyInterface:
         except Exception as e:
             print(f"Error: {e}")
             return None
+
+    def validate_target_value(self, *args):
+        """Validate that the target value is a valid number"""
+        try:
+            # Get the current value
+            current_value = self.target_value_var.get()
+            
+            # If empty, set to 0.0
+            if current_value == "":
+                self.target_value = 0.0
+                return
+            
+            # Try to convert to float
+            value = float(current_value)
+            
+            # Update the target value
+            self.target_value = value
+            
+            # Update the plot if active
+            if self.plot_active and hasattr(self, 'target_line'):
+                self.target_line.setValue(self.target_value)
+            
+        except ValueError:
+            # If not a valid number, revert to previous value
+            self.target_value_var.set(str(self.target_value))
+            self.update_terminal(f"Invalid target value: {current_value}. Please enter a number.\n")
+
+    def create_plot_window(self):
+        """Create a new window with a live plot of channel data using PyQtGraph"""
+        try:
+            # Import required libraries
+            from PyQt5 import QtWidgets, QtCore, QtGui
+            import pyqtgraph as pg
+            import numpy as np
+            from datetime import datetime
+            import sys
+            
+            # Reset plot data
+            self.plot_data_ch0 = []
+            self.plot_data_ch1 = []
+            self.plot_combined = []
+            self.plot_timestamps = []
+            
+            # Set plot active flag
+            self.plot_active = True
+            
+            # Create a QApplication instance if it doesn't exist
+            if QtWidgets.QApplication.instance() is None:
+                self.pyqt_app = QtWidgets.QApplication(sys.argv)
+            else:
+                self.pyqt_app = QtWidgets.QApplication.instance()
+            
+            # Create a window for the plot
+            self.pyqt_plot_window = QtWidgets.QMainWindow()
+            self.pyqt_plot_window.setWindowTitle('ISO Trainer - Live Channel Data')
+            self.pyqt_plot_window.resize(1000, 800)
+            self.pyqt_plot_window.closeEvent = self.on_pyqt_close
+            
+            # Set dark theme
+            self.pyqt_plot_window.setStyleSheet("background-color: #1a1a1a; color: white;")
+            
+            # Create a central widget and layout
+            central_widget = QtWidgets.QWidget()
+            self.pyqt_plot_window.setCentralWidget(central_widget)
+            layout = QtWidgets.QVBoxLayout(central_widget)
+            layout.setSpacing(0)
+            layout.setContentsMargins(0, 0, 0, 0)
+            
+            # Create a label for instructions
+            instructions = QtWidgets.QLabel("ISO Trainer - Live Channel Data")
+            instructions.setAlignment(QtCore.Qt.AlignCenter)
+            instructions.setStyleSheet("font-size: 16px; font-weight: bold; padding: 10px; background-color: #2d2d2d;")
+            layout.addWidget(instructions)
+            
+            # Set dark background and configure plot settings
+            pg.setConfigOption('background', '#1a1a1a')
+            pg.setConfigOption('foreground', 'w')
+            
+            # Create plot widgets - Combined on top (double height), then Channel 0 and 1 together
+            plot_combined = pg.PlotWidget(title="Combined Data")
+            plot_channels = pg.PlotWidget(title="Channel 0 and 1")
+            
+            # Add plots to layout with combined plot being twice the height
+            layout.addWidget(plot_combined, 2)  # 2x height ratio
+            layout.addWidget(plot_channels, 1)  # 1x height ratio
+            
+            # Configure plots
+            for plot in [plot_combined, plot_channels]:
+                plot.setLabel('left', 'Weight (kg)')
+                plot.setLabel('bottom', 'Time (s)')
+                plot.showGrid(x=True, y=True, alpha=0.3)
+                plot.setBackground('#1a1a1a')
+                
+                # Style the axis
+                axis_pen = pg.mkPen(color='w', width=1)
+                plot.getAxis('left').setPen(axis_pen)
+                plot.getAxis('bottom').setPen(axis_pen)
+                
+                # Style the grid
+                plot.getAxis('left').setGrid(True)
+                plot.getAxis('bottom').setGrid(True)
+                
+                # Style the labels
+                label_style = {'color': '#ffffff', 'font-size': '14pt'}
+                plot.setLabel('left', 'Weight (kg)', **label_style)
+                plot.setLabel('bottom', 'Time (s)', **label_style)
+                
+                # Style the title
+                plot.setTitle(plot.plotItem.titleLabel.text, color='#ffffff', size='16pt')
+            
+            # Create plot curves with specific colors
+            self.curve_combined = plot_combined.plot(pen=pg.mkPen('#ff0000', width=3), name='Combined')  # Red
+            self.curve_ch0 = plot_channels.plot(pen=pg.mkPen('#0000ff', width=3), name='Channel 0')  # Blue
+            self.curve_ch1 = plot_channels.plot(pen=pg.mkPen('#00ff00', width=3), name='Channel 1')  # Green
+            
+            # Add target value line to combined plot
+            self.target_line = pg.InfiniteLine(
+                pos=self.target_value, 
+                angle=0, 
+                pen=pg.mkPen(color='#ffff00', width=2, style=QtCore.Qt.DashLine),
+                label=f'Target: {self.target_value} kg',
+                labelOpts={'color': '#ffff00', 'position': 0.95}
+            )
+            plot_combined.addItem(self.target_line)
+            
+            # Store plot widgets for later reference
+            self.plot_widgets = {
+                'combined': plot_combined,
+                'channels': plot_channels
+            }
+            
+            # Create a timer for updating the plot
+            self.timer = QtCore.QTimer()
+            self.timer.timeout.connect(self.update_pyqt_plot)
+            self.timer.start(100)  # Update every 100ms (10 times per second)
+            
+            # Show the window
+            self.pyqt_plot_window.show()
+            
+            # Create a Toplevel window in Tkinter to maintain control
+            if self.plot_window is not None:
+                self.plot_window.destroy()
+            
+            self.plot_window = tk.Toplevel(self.master)
+            self.plot_window.title("Plot Control")
+            self.plot_window.geometry("300x200")
+            self.plot_window.protocol("WM_DELETE_WINDOW", self.close_plot_window)
+            
+            # Create a frame for controls
+            control_frame = tk.Frame(self.plot_window)
+            control_frame.pack(fill=tk.BOTH, expand=True)
+            
+            # Import required libraries for the control panel
+            from tkinter import ttk
+            
+            # Create a label for instructions
+            instructions = ttk.Label(control_frame, text="Plot window is open.\nClose this window to stop plotting.")
+            instructions.pack(pady=10)
+            
+            # Create a target value input in the control window
+            target_frame = ttk.Frame(control_frame)
+            target_frame.pack(pady=10)
+            
+            ttk.Label(target_frame, text="Target Value (kg):").grid(row=0, column=0, padx=5)
+            target_entry = ttk.Entry(target_frame, width=10)
+            target_entry.grid(row=0, column=1, padx=5)
+            target_entry.insert(0, str(self.target_value))
+            
+            def update_target():
+                try:
+                    value = float(target_entry.get())
+                    self.target_value = value
+                    self.target_value_var.set(str(value))
+                    self.target_line.setValue(value)
+                    self.target_line.label.setText(f'Target: {value} kg')
+                except ValueError:
+                    target_entry.delete(0, tk.END)
+                    target_entry.insert(0, str(self.target_value))
+            
+            ttk.Button(target_frame, text="Update", command=update_target).grid(row=0, column=2, padx=5)
+            
+            # Create a button to close the plot
+            close_button = ttk.Button(control_frame, text="Close Plot", command=self.close_plot_window)
+            close_button.pack(pady=10)
+            
+        except ImportError as e:
+            # Show error message if PyQtGraph is not installed
+            from tkinter import messagebox
+            messagebox.showerror("Missing Dependencies", 
+                                f"Please install the required packages:\n\n{e}\n\nRun:\npip install PyQt5 pyqtgraph")
+            return
+        except Exception as e:
+            # Show any other errors
+            from tkinter import messagebox
+            messagebox.showerror("Error", f"An error occurred: {e}")
+            return
+
+    def update_pyqt_plot(self):
+        """Update the PyQtGraph plot with new data"""
+        if not self.plot_active or self.pyqt_plot_window is None:
+            return
+        
+        try:
+            import numpy as np
+            from datetime import datetime
+            
+            # Get current time for scrolling effect
+            current_time = datetime.now()
+            
+            # Convert timestamps to numbers for plotting
+            if self.plot_timestamps:
+                # Convert datetime objects to seconds relative to current time
+                time_values = [(ts - current_time).total_seconds() for ts in self.plot_timestamps]
+                
+                # Update Channel 0 and 1 plots
+                if len(self.plot_data_ch0) > 0:
+                    self.curve_ch0.setData(time_values, self.plot_data_ch0)
+                
+                if len(self.plot_data_ch1) > 0:
+                    # Make sure we have the same number of timestamps as data points
+                    if len(self.plot_data_ch1) <= len(time_values):
+                        self.curve_ch1.setData(time_values[:len(self.plot_data_ch1)], self.plot_data_ch1)
+                
+                # Update combined plot
+                if len(self.plot_data_ch0) > 0 and len(self.plot_data_ch1) > 0:
+                    # Calculate combined data (sum of both channels)
+                    min_len = min(len(self.plot_data_ch0), len(self.plot_data_ch1))
+                    combined_data = [self.plot_data_ch0[i] + self.plot_data_ch1[i] for i in range(min_len)]
+                    self.plot_combined = combined_data
+                    self.curve_combined.setData(time_values[:min_len], combined_data)
+                # If only one channel has data, show that as the combined data
+                elif len(self.plot_data_ch0) > 0:
+                    self.curve_combined.setData(time_values, self.plot_data_ch0)
+                elif len(self.plot_data_ch1) > 0:
+                    self.curve_combined.setData(time_values[:len(self.plot_data_ch1)], self.plot_data_ch1)
+                
+                # Update target line label
+                if hasattr(self, 'target_line'):
+                    self.target_line.label.setText(f'Target: {self.target_value} kg')
+        except Exception as e:
+            print(f"Error updating plot: {e}")
+
+    def on_pyqt_close(self, event):
+        """Handle PyQt window close event"""
+        self.close_plot_window()
+        event.accept()
+
+    def close_plot_window(self):
+        """Close the plot window and stop updating"""
+        self.plot_active = False
+        
+        # Stop the timer if it exists
+        if hasattr(self, 'timer') and self.timer is not None:
+            self.timer.stop()
+        
+        # Close the PyQt window if it exists
+        if self.pyqt_plot_window is not None:
+            self.pyqt_plot_window.close()
+            self.pyqt_plot_window = None
+        
+        if self.plot_window is not None:
+            self.plot_window.destroy()
+            self.plot_window = None
 
 
 
@@ -1124,9 +1460,15 @@ def main():
     file_menu = tk.Menu(menubar, tearoff=0)
     menubar.add_cascade(label="File", menu=file_menu)
 
+    # Create "Plot" menu
+    plot_menu = tk.Menu(menubar, tearoff=0)
+    menubar.add_cascade(label="Plot", menu=plot_menu)
+    
+    # Add "Live Plot" command to "Plot" menu
+    plot_menu.add_command(label="Live Plot", command=lambda: app.create_plot_window())
 
-    # Add "Help" command directly to "File" menu
-    file_menu.add_command(label="Help", command=lambda: create_about_dialog(root))
+    # Add "About" command directly to "File" menu
+    file_menu.add_command(label="About", command=lambda: create_about_dialog(root))
 
     root.configure(menu=menubar)
     root.mainloop()
