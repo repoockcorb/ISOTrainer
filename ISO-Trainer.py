@@ -26,6 +26,11 @@ from PIL import Image
 from Phidget22.Phidget import *
 from Phidget22.Devices.VoltageRatioInput import *
 
+# PyQt5 imports for plotting
+from PyQt5.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QGroupBox, QApplication
+from PyQt5.QtCore import QTimer, Qt
+import pyqtgraph as pg
+
 # from functools import partial
 
 
@@ -82,9 +87,7 @@ class MyInterface:
         data_eq = os.path.join(current_directory, "equipment-data", "equipment.csv")
         self.multiplier_values, self.multipliers_dict = self.load_multiplier_options(data_eq)
 
-
         self.logging_active = False  # Flag to indicate whether logging is active
-
         self.live_update_flag = True  # Flag to control live update thread
 
         # Folder where the calibration data CSV files are stored
@@ -95,7 +98,6 @@ class MyInterface:
 
         # Filter only CSV files
         self.calibration_data = [os.path.splitext(file)[0] for file in all_files if file.endswith(".csv")]
-
 
         set_default_color_theme("dark-blue")
         ctk.set_appearance_mode("dark")
@@ -109,10 +111,13 @@ class MyInterface:
         self.plot_timestamps = []
         self.plot_window = None
         self.plot_active = False
+        self.plot_window_open = False  # Initialize plot window state
         self.max_plot_points = 250  # Maximum number of points to show on plot
         self.pyqt_app = None
         self.pyqt_plot_window = None
         self.target_value = 0.0  # Default target value for the horizontal line
+        self.target_value_min = 0.0  # Default minimum target value
+        self.target_value_max = 10.0  # Default maximum target value
         self.scroll_time = 5.0  # Scrolling window in seconds
 
     
@@ -519,7 +524,6 @@ class MyInterface:
         weight_newtons = (voltageRatio - offset) * float(gain)
         weight_grams = weight_newtons * 1000 * float(self.current_multiplier)
         weight_kg = weight_grams / 1000.0
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
 
         # Print the weight for debugging
         if weight_kg < 0.05 and weight_grams > -99.99 * float(self.current_multiplier):
@@ -528,28 +532,40 @@ class MyInterface:
             display_kg = weight_kg
         else:
             display_kg = weight_kg
-      
-
-        # print(f"{timestamp} - Channel {channel_id}: {weight_grams:.2f} g, {display_kg:.2f} kg")
 
         # Update the correct UI label
         self.weight_readings_labels[label_index].configure(text=f"Weight {channel_id}\n{display_kg:.1f} Kg")
 
         # Store data for plotting if plot is active
         if self.plot_active:
+            current_time = datetime.now()
+            
+            # Initialize lists if they don't exist
+            if not hasattr(self, 'plot_data_ch0'):
+                self.plot_data_ch0 = []
+            if not hasattr(self, 'plot_data_ch1'):
+                self.plot_data_ch1 = []
+            if not hasattr(self, 'plot_timestamps'):
+                self.plot_timestamps = []
+            
+            # Add data for the appropriate channel
             if channel_id == 0:
                 self.plot_data_ch0.append(display_kg)
-                # Only add timestamp once (for channel 0)
-                self.plot_timestamps.append(datetime.now())
-                # Limit the number of points
-                if len(self.plot_data_ch0) > self.max_plot_points:
-                    self.plot_data_ch0.pop(0)
-                    self.plot_timestamps.pop(0)
+                # Only add timestamp for channel 0
+                if len(self.plot_timestamps) < len(self.plot_data_ch0):
+                    self.plot_timestamps.append(current_time)
             elif channel_id == 1:
                 self.plot_data_ch1.append(display_kg)
-                # Limit the number of points
-                if len(self.plot_data_ch1) > self.max_plot_points:
-                    self.plot_data_ch1.pop(0)
+                # Ensure channel 1 data aligns with channel 0
+                while len(self.plot_data_ch1) < len(self.plot_data_ch0):
+                    self.plot_data_ch1.append(0.0)
+            
+            # Limit the number of points
+            max_points = self.max_plot_points
+            if len(self.plot_data_ch0) > max_points:
+                self.plot_data_ch0 = self.plot_data_ch0[-max_points:]
+                self.plot_data_ch1 = self.plot_data_ch1[-max_points:]
+                self.plot_timestamps = self.plot_timestamps[-max_points:]
 
         return weight_grams
 
@@ -1060,217 +1076,195 @@ class MyInterface:
             self.update_terminal(f"Invalid target value: {current_value}. Please enter a number.\n")
 
     def create_plot_window(self):
-        """Create a new window with a live plot of channel data using PyQtGraph"""
+        """Create a new window for real-time plotting"""
+        if self.plot_window_open:
+            return
+            
+        self.plot_window_open = True
+        self.plot_active = True
+        
+        # Initialize PyQt application if it doesn't exist
+        if QApplication.instance() is None:
+            self.pyqt_app = QApplication([])
+        else:
+            self.pyqt_app = QApplication.instance()
+        
+        # Create a new window
+        self.plot_window = QMainWindow()
+        self.plot_window.setWindowTitle("Real-time Data Plot")
+        self.plot_window.resize(800, 600)
+        
+        # Create central widget and layout
+        central_widget = QWidget()
+        self.plot_window.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
+        
+        # Create plot widgets
+        self.combined_plot = pg.PlotWidget()
+        self.combined_plot.setBackground('w')
+        self.combined_plot.setTitle("Combined Channel Data", color='k')
+        self.combined_plot.setLabel('left', 'Weight (kg)', color='k')
+        self.combined_plot.setLabel('bottom', 'Time (s)', color='k')
+        self.combined_plot.showGrid(x=True, y=True, alpha=0.3)
+        
+        self.individual_plot = pg.PlotWidget()
+        self.individual_plot.setBackground('w')
+        self.individual_plot.setTitle("Individual Channel Data", color='k')
+        self.individual_plot.setLabel('left', 'Weight (kg)', color='k')
+        self.individual_plot.setLabel('bottom', 'Time (s)', color='k')
+        self.individual_plot.showGrid(x=True, y=True, alpha=0.3)
+        
+        # Add plots to layout with size ratio 2:1
+        layout.addWidget(self.combined_plot, stretch=2)
+        layout.addWidget(self.individual_plot, stretch=1)
+        
+        # Create control panel
+        control_panel = QWidget()
+        control_layout = QHBoxLayout(control_panel)
+        
+        # Target value controls
+        target_group = QGroupBox("Target Values")
+        target_layout = QVBoxLayout(target_group)
+        
+        # Min target value
+        min_target_layout = QHBoxLayout()
+        min_target_label = QLabel("Min Target (kg):")
+        self.min_target_input = QLineEdit()
+        self.min_target_input.setText("0.0")
+        min_target_layout.addWidget(min_target_label)
+        min_target_layout.addWidget(self.min_target_input)
+        target_layout.addLayout(min_target_layout)
+        
+        # Max target value
+        max_target_layout = QHBoxLayout()
+        max_target_label = QLabel("Max Target (kg):")
+        self.max_target_input = QLineEdit()
+        self.max_target_input.setText("10.0")
+        max_target_layout.addWidget(max_target_label)
+        max_target_layout.addWidget(self.max_target_input)
+        target_layout.addLayout(max_target_layout)
+        
+        # Add target group to control panel
+        control_layout.addWidget(target_group)
+        
+        # Add control panel to main layout
+        layout.addWidget(control_panel)
+        
+        # Initialize plot data
+        self.plot_data_ch0 = []
+        self.plot_data_ch1 = []
+        self.plot_timestamps = []
+        
+        # Create curves for each channel
+        self.curve_combined = self.combined_plot.plot(pen=pg.mkPen(color='g', width=2), name='Combined')
+        self.curve_ch0 = self.individual_plot.plot(pen=pg.mkPen(color='b', width=2), name='Channel 0')
+        self.curve_ch1 = self.individual_plot.plot(pen=pg.mkPen(color='r', width=2), name='Channel 1')
+        
+        # Add target lines to both plots
+        self.target_line_min = pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen(color='y', width=2, style=Qt.DashLine), label='Min Target: 0.0 kg')
+        self.target_line_max = pg.InfiniteLine(pos=10, angle=0, pen=pg.mkPen(color='m', width=2, style=Qt.DashLine), label='Max Target: 10.0 kg')
+        self.combined_plot.addItem(self.target_line_min)
+        self.combined_plot.addItem(self.target_line_max)
+        
+        # Add target lines to individual plot
+        self.individual_target_line_min = pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen(color='y', width=2, style=Qt.DashLine), label='Min Target: 0.0 kg')
+        self.individual_target_line_max = pg.InfiniteLine(pos=5, angle=0, pen=pg.mkPen(color='m', width=2, style=Qt.DashLine), label='Max Target: 5.0 kg')
+        self.individual_plot.addItem(self.individual_target_line_min)
+        self.individual_plot.addItem(self.individual_target_line_max)
+        
+        # Connect target value inputs to update function
+        self.min_target_input.textChanged.connect(self.update_target_values)
+        self.max_target_input.textChanged.connect(self.update_target_values)
+        
+        # Show the window
+        self.plot_window.show()
+        
+        # Start update timer
+        self.plot_timer = QTimer()
+        self.plot_timer.timeout.connect(self.update_pyqt_plot)
+        self.plot_timer.start(100)  # Update every 100ms
+        
+        # Store reference to plot window
+        self.pyqt_plot_window = self.plot_window
+
+    def update_target_values(self):
+        """Update the target value lines when input values change"""
         try:
-            # Import required libraries
-            from PyQt5 import QtWidgets, QtCore, QtGui
-            import pyqtgraph as pg
-            import numpy as np
-            from datetime import datetime
-            import sys
+            min_val = float(self.min_target_input.text())
+            max_val = float(self.max_target_input.text())
             
-            # Reset plot data
-            self.plot_data_ch0 = []
-            self.plot_data_ch1 = []
-            self.plot_combined = []
-            self.plot_timestamps = []
+            # Ensure min is less than max
+            if min_val > max_val:
+                min_val, max_val = max_val, min_val
+                self.min_target_input.setText(str(min_val))
+                self.max_target_input.setText(str(max_val))
             
-            # Set plot active flag
-            self.plot_active = True
+            # Update the target lines for combined plot
+            self.target_line_min.setValue(min_val)
+            self.target_line_max.setValue(max_val)
+            self.target_line_min.label.setText(f'Min Target: {min_val:.1f} kg')
+            self.target_line_max.label.setText(f'Max Target: {max_val:.1f} kg')
             
-            # Create a QApplication instance if it doesn't exist
-            if QtWidgets.QApplication.instance() is None:
-                self.pyqt_app = QtWidgets.QApplication(sys.argv)
-            else:
-                self.pyqt_app = QtWidgets.QApplication.instance()
+            # Update the target lines for individual plot (half values)
+            half_min = min_val / 2
+            half_max = max_val / 2
+            self.individual_target_line_min.setValue(half_min)
+            self.individual_target_line_max.setValue(half_max)
+            self.individual_target_line_min.label.setText(f'Min Target: {half_min:.1f} kg')
+            self.individual_target_line_max.label.setText(f'Max Target: {half_max:.1f} kg')
             
-            # Create a window for the plot
-            self.pyqt_plot_window = QtWidgets.QMainWindow()
-            self.pyqt_plot_window.setWindowTitle('ISO Trainer - Live Channel Data')
-            self.pyqt_plot_window.resize(1000, 800)
-            self.pyqt_plot_window.closeEvent = self.on_pyqt_close
-            
-            # Set dark theme
-            self.pyqt_plot_window.setStyleSheet("background-color: #1a1a1a; color: white;")
-            
-            # Create a central widget and layout
-            central_widget = QtWidgets.QWidget()
-            self.pyqt_plot_window.setCentralWidget(central_widget)
-            layout = QtWidgets.QVBoxLayout(central_widget)
-            layout.setSpacing(0)
-            layout.setContentsMargins(0, 0, 0, 0)
-            
-            # Create a label for instructions
-            instructions = QtWidgets.QLabel("ISO Trainer - Live Channel Data")
-            instructions.setAlignment(QtCore.Qt.AlignCenter)
-            instructions.setStyleSheet("font-size: 16px; font-weight: bold; padding: 10px; background-color: #2d2d2d;")
-            layout.addWidget(instructions)
-            
-            # Set dark background and configure plot settings
-            pg.setConfigOption('background', '#1a1a1a')
-            pg.setConfigOption('foreground', 'w')
-            
-            # Create plot widgets - Combined on top (double height), then Channel 0 and 1 together
-            plot_combined = pg.PlotWidget(title="Combined Data")
-            plot_channels = pg.PlotWidget(title="Channel 0 and 1")
-            
-            # Add plots to layout with combined plot being twice the height
-            layout.addWidget(plot_combined, 2)  # 2x height ratio
-            layout.addWidget(plot_channels, 1)  # 1x height ratio
-            
-            # Configure plots
-            for plot in [plot_combined, plot_channels]:
-                plot.setLabel('left', 'Weight (kg)')
-                plot.setLabel('bottom', 'Time (s)')
-                plot.showGrid(x=True, y=True, alpha=0.3)
-                plot.setBackground('#1a1a1a')
-                
-                # Style the axis
-                axis_pen = pg.mkPen(color='w', width=1)
-                plot.getAxis('left').setPen(axis_pen)
-                plot.getAxis('bottom').setPen(axis_pen)
-                
-                # Style the grid
-                plot.getAxis('left').setGrid(True)
-                plot.getAxis('bottom').setGrid(True)
-                
-                # Style the labels
-                label_style = {'color': '#ffffff', 'font-size': '14pt'}
-                plot.setLabel('left', 'Weight (kg)', **label_style)
-                plot.setLabel('bottom', 'Time (s)', **label_style)
-                
-                # Style the title
-                plot.setTitle(plot.plotItem.titleLabel.text, color='#ffffff', size='16pt')
-            
-            # Create plot curves with specific colors
-            self.curve_combined = plot_combined.plot(pen=pg.mkPen('#ff0000', width=3), name='Combined')  # Red
-            self.curve_ch0 = plot_channels.plot(pen=pg.mkPen('#0000ff', width=3), name='Channel 0')  # Blue
-            self.curve_ch1 = plot_channels.plot(pen=pg.mkPen('#00ff00', width=3), name='Channel 1')  # Green
-            
-            # Add target value line to combined plot
-            self.target_line = pg.InfiniteLine(
-                pos=self.target_value, 
-                angle=0, 
-                pen=pg.mkPen(color='#ffff00', width=2, style=QtCore.Qt.DashLine),
-                label=f'Target: {self.target_value} kg',
-                labelOpts={'color': '#ffff00', 'position': 0.95}
-            )
-            plot_combined.addItem(self.target_line)
-            
-            # Store plot widgets for later reference
-            self.plot_widgets = {
-                'combined': plot_combined,
-                'channels': plot_channels
-            }
-            
-            # Create a timer for updating the plot
-            self.timer = QtCore.QTimer()
-            self.timer.timeout.connect(self.update_pyqt_plot)
-            self.timer.start(100)  # Update every 100ms (10 times per second)
-            
-            # Show the window
-            self.pyqt_plot_window.show()
-            
-            # Create a Toplevel window in Tkinter to maintain control
-            if self.plot_window is not None:
-                self.plot_window.destroy()
-            
-            self.plot_window = tk.Toplevel(self.master)
-            self.plot_window.title("Plot Control")
-            self.plot_window.geometry("300x200")
-            self.plot_window.protocol("WM_DELETE_WINDOW", self.close_plot_window)
-            
-            # Create a frame for controls
-            control_frame = tk.Frame(self.plot_window)
-            control_frame.pack(fill=tk.BOTH, expand=True)
-            
-            # Import required libraries for the control panel
-            from tkinter import ttk
-            
-            # Create a label for instructions
-            instructions = ttk.Label(control_frame, text="Plot window is open.\nClose this window to stop plotting.")
-            instructions.pack(pady=10)
-            
-            # Create a target value input in the control window
-            target_frame = ttk.Frame(control_frame)
-            target_frame.pack(pady=10)
-            
-            ttk.Label(target_frame, text="Target Value (kg):").grid(row=0, column=0, padx=5)
-            target_entry = ttk.Entry(target_frame, width=10)
-            target_entry.grid(row=0, column=1, padx=5)
-            target_entry.insert(0, str(self.target_value))
-            
-            def update_target():
-                try:
-                    value = float(target_entry.get())
-                    self.target_value = value
-                    self.target_value_var.set(str(value))
-                    self.target_line.setValue(value)
-                    self.target_line.label.setText(f'Target: {value} kg')
-                except ValueError:
-                    target_entry.delete(0, tk.END)
-                    target_entry.insert(0, str(self.target_value))
-            
-            ttk.Button(target_frame, text="Update", command=update_target).grid(row=0, column=2, padx=5)
-            
-            # Create a button to close the plot
-            close_button = ttk.Button(control_frame, text="Close Plot", command=self.close_plot_window)
-            close_button.pack(pady=10)
-            
-        except ImportError as e:
-            # Show error message if PyQtGraph is not installed
-            from tkinter import messagebox
-            messagebox.showerror("Missing Dependencies", 
-                                f"Please install the required packages:\n\n{e}\n\nRun:\npip install PyQt5 pyqtgraph")
-            return
-        except Exception as e:
-            # Show any other errors
-            from tkinter import messagebox
-            messagebox.showerror("Error", f"An error occurred: {e}")
-            return
+        except ValueError:
+            # Handle invalid input
+            pass
 
     def update_pyqt_plot(self):
         """Update the PyQtGraph plot with new data"""
-        if not self.plot_active or self.pyqt_plot_window is None:
-            return
-        
         try:
-            import numpy as np
-            from datetime import datetime
+            # Check if plot is still active
+            if not self.plot_active:
+                return
             
-            # Get current time for scrolling effect
-            current_time = datetime.now()
-            
-            # Convert timestamps to numbers for plotting
-            if self.plot_timestamps:
-                # Convert datetime objects to seconds relative to current time
-                time_values = [(ts - current_time).total_seconds() for ts in self.plot_timestamps]
+            # Convert timestamps to relative time in seconds
+            if self.plot_timestamps and self.plot_data_ch0 and self.plot_data_ch1:
+                # Ensure all arrays have the same length
+                min_length = min(len(self.plot_timestamps), len(self.plot_data_ch0), len(self.plot_data_ch1))
                 
-                # Update Channel 0 and 1 plots
-                if len(self.plot_data_ch0) > 0:
-                    self.curve_ch0.setData(time_values, self.plot_data_ch0)
+                # Trim arrays to the same length
+                time_values = [(t - self.plot_timestamps[0]).total_seconds() for t in self.plot_timestamps[:min_length]]
+                ch0_data = self.plot_data_ch0[:min_length]
+                ch1_data = self.plot_data_ch1[:min_length]
                 
-                if len(self.plot_data_ch1) > 0:
-                    # Make sure we have the same number of timestamps as data points
-                    if len(self.plot_data_ch1) <= len(time_values):
-                        self.curve_ch1.setData(time_values[:len(self.plot_data_ch1)], self.plot_data_ch1)
+                # Update individual channel plots
+                self.curve_ch0.setData(time_values, ch0_data)
+                self.curve_ch1.setData(time_values, ch1_data)
                 
-                # Update combined plot
-                if len(self.plot_data_ch0) > 0 and len(self.plot_data_ch1) > 0:
-                    # Calculate combined data (sum of both channels)
-                    min_len = min(len(self.plot_data_ch0), len(self.plot_data_ch1))
-                    combined_data = [self.plot_data_ch0[i] + self.plot_data_ch1[i] for i in range(min_len)]
-                    self.plot_combined = combined_data
-                    self.curve_combined.setData(time_values[:min_len], combined_data)
-                # If only one channel has data, show that as the combined data
-                elif len(self.plot_data_ch0) > 0:
-                    self.curve_combined.setData(time_values, self.plot_data_ch0)
-                elif len(self.plot_data_ch1) > 0:
-                    self.curve_combined.setData(time_values[:len(self.plot_data_ch1)], self.plot_data_ch1)
+                # Calculate combined data
+                combined_data = [a + b for a, b in zip(ch0_data, ch1_data)]
+                self.curve_combined.setData(time_values, combined_data)
                 
-                # Update target line label
-                if hasattr(self, 'target_line'):
-                    self.target_line.label.setText(f'Target: {self.target_value} kg')
+                # Update target lines for both plots
+                try:
+                    min_val = float(self.min_target_input.text())
+                    max_val = float(self.max_target_input.text())
+                    
+                    # Update combined plot target lines
+                    self.target_line_min.setValue(min_val)
+                    self.target_line_max.setValue(max_val)
+                    self.target_line_min.label.setText(f'Min Target: {min_val:.1f} kg')
+                    self.target_line_max.label.setText(f'Max Target: {max_val:.1f} kg')
+                    
+                    # Update individual plot target lines (half values)
+                    half_min = min_val / 2
+                    half_max = max_val / 2
+                    
+                    # Update individual plot target lines directly
+                    self.individual_target_line_min.setValue(half_min)
+                    self.individual_target_line_max.setValue(half_max)
+                    self.individual_target_line_min.label.setText(f'Min Target: {half_min:.1f} kg')
+                    self.individual_target_line_max.label.setText(f'Max Target: {half_max:.1f} kg')
+                except ValueError:
+                    pass  # Handle invalid input silently
+                    
         except Exception as e:
             print(f"Error updating plot: {e}")
 
@@ -1284,8 +1278,8 @@ class MyInterface:
         self.plot_active = False
         
         # Stop the timer if it exists
-        if hasattr(self, 'timer') and self.timer is not None:
-            self.timer.stop()
+        if hasattr(self, 'plot_timer') and self.plot_timer is not None:
+            self.plot_timer.stop()
         
         # Close the PyQt window if it exists
         if self.pyqt_plot_window is not None:
