@@ -30,6 +30,7 @@ from Phidget22.Devices.VoltageRatioInput import *
 from PyQt5.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QGroupBox, QApplication
 from PyQt5.QtCore import QTimer, Qt
 import pyqtgraph as pg
+from PyQt5.QtGui import QIcon
 
 # from functools import partial
 
@@ -216,7 +217,7 @@ class MyInterface:
         pywinstyles.set_opacity(participants_ID_frame, color="#000001") # just add this line
         participants_ID_frame.place(x=110, y=250)
 
-        self.participants_ID = ctk.CTkEntry(participants_ID_frame, width=155+55, placeholder_text="Participants ID (Output File Prefix)", border_color="black")
+        self.participants_ID = ctk.CTkEntry(participants_ID_frame, width=310, placeholder_text="Participants ID (Output File Prefix)", border_color="black")
         self.participants_ID.grid(row=0, column=0, padx=5, pady=5)
 
 
@@ -282,21 +283,7 @@ class MyInterface:
                                                progress_color="#28a745")
         self.auto_start_switch.grid(row=0, column=1, padx=5, pady=5)
 
-        # Create frame for target value input
-        target_frame = ctk.CTkFrame(self.master, bg_color="#000001", fg_color="#000001")
-        pywinstyles.set_opacity(target_frame, color="#000001")
-        target_frame.place(x=110+165+50, y=250)  # Position below auto/manual mode frame
 
-        # participants_ID_frame.place(x=110, y=250)
-
-        # Create target value input
-        self.target_value_var = ctk.StringVar(value="0.0")
-        self.target_value_entry = ctk.CTkEntry(target_frame, width=95, placeholder_text="Target (Kg)", border_color='black', textvariable=self.target_value_var)
-        self.target_value_entry.grid(row=0, column=0, padx=5, pady=5)
-        
-        # Add validation for target value (numbers only)
-        self.target_value_var.trace_add("write", self.validate_target_value)
-        
         # # Create label for target value
         # target_label = ctk.CTkLabel(target_frame, 
         #                            text="Target Value", 
@@ -1093,7 +1080,29 @@ class MyInterface:
         self.plot_window = QMainWindow()
         self.plot_window.setWindowTitle("ISO Trainer - Live Channel Data")
         self.plot_window.resize(800, 600)
+
+        # Set dark title bar and icon
+        icon_path = "images/icon.ico"
+        self.plot_window.setWindowIcon(QIcon(icon_path))
         
+        # Set dark title bar on Windows
+        if os.name == 'nt':  # Windows
+            # Enable CustomWindowHint to get custom title bar
+            self.plot_window.setWindowFlags(Qt.Window | Qt.CustomizeWindowHint | Qt.WindowTitleHint | Qt.WindowSystemMenuHint | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
+            # Apply dark title bar
+            DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+            try:
+                import ctypes
+                set_window_attribute = ctypes.windll.dwmapi.DwmSetWindowAttribute
+                hwnd = self.plot_window.winId().__int__()
+                rendering_policy = 2
+                set_window_attribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ctypes.byref(ctypes.c_int(rendering_policy)), ctypes.sizeof(ctypes.c_int))
+            except:
+                pass  # Fallback gracefully if dark mode fails
+
+        # Set up window close event
+        self.plot_window.closeEvent = self.on_pyqt_close
+
         # Create central widget and layout
         central_widget = QWidget()
         self.plot_window.setCentralWidget(central_widget)
@@ -1136,27 +1145,47 @@ class MyInterface:
                 background-color: #2d2d2d;
                 color: white;
                 border: 1px solid #3d3d3d;
-                padding: 2px;
+                border-radius: 5px;
+                padding: 5px;
+                font-size: 12px;
+                min-width: 100px;
+            }
+            QLineEdit:focus {
+                border: 1px solid #007bff;
+                background-color: #363636;
+            }
+            QLabel {
+                font-size: 12px;
+                padding: 5px;
             }
             QGroupBox {
-                border: 1px solid #3d3d3d;
+                border: none;
                 margin-top: 0.5em;
+                padding: 15px;
+                background-color: #2d2d2d;
+                border-radius: 10px;
             }
             QGroupBox::title {
                 color: white;
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
             }
         """)
         control_layout = QHBoxLayout(control_panel)
+        control_layout.setContentsMargins(10, 5, 10, 5)
         
         # Target value controls
         target_group = QGroupBox("Target Values")
         target_layout = QVBoxLayout(target_group)
+        target_layout.setSpacing(10)
         
         # Min target value
         min_target_layout = QHBoxLayout()
         min_target_label = QLabel("Min Target (kg):")
         self.min_target_input = QLineEdit()
-        self.min_target_input.setText("0.0")
+        self.min_target_input.setText("5")
+        self.min_target_input.setPlaceholderText("Enter min target")
         min_target_layout.addWidget(min_target_label)
         min_target_layout.addWidget(self.min_target_input)
         target_layout.addLayout(min_target_layout)
@@ -1165,7 +1194,8 @@ class MyInterface:
         max_target_layout = QHBoxLayout()
         max_target_label = QLabel("Max Target (kg):")
         self.max_target_input = QLineEdit()
-        self.max_target_input.setText("10.0")
+        self.max_target_input.setText("10")
+        self.max_target_input.setPlaceholderText("Enter max target")
         max_target_layout.addWidget(max_target_label)
         max_target_layout.addWidget(self.max_target_input)
         target_layout.addLayout(max_target_layout)
@@ -1187,13 +1217,13 @@ class MyInterface:
         self.curve_ch1 = self.individual_plot.plot(pen=pg.mkPen(color='r', width=2), name='Channel 1')
         
         # Add target lines to both plots with yellow color
-        self.target_line_min = pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen(color='y', width=2, style=Qt.DashLine), label='Min Target: 0.0 kg', labelOpts={'color': 'y'})
+        self.target_line_min = pg.InfiniteLine(pos=5, angle=0, pen=pg.mkPen(color='y', width=2, style=Qt.DashLine), label='Min Target: 5.0 kg', labelOpts={'color': 'y'})
         self.target_line_max = pg.InfiniteLine(pos=10, angle=0, pen=pg.mkPen(color='y', width=2, style=Qt.DashLine), label='Max Target: 10.0 kg', labelOpts={'color': 'y'})
         self.combined_plot.addItem(self.target_line_min)
         self.combined_plot.addItem(self.target_line_max)
         
         # Add target lines to individual plot
-        self.individual_target_line_min = pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen(color='y', width=2, style=Qt.DashLine), label='Min Target: 0.0 kg', labelOpts={'color': 'y'})
+        self.individual_target_line_min = pg.InfiniteLine(pos=2.5, angle=0, pen=pg.mkPen(color='y', width=2, style=Qt.DashLine), label='Min Target: 2.5 kg', labelOpts={'color': 'y'})
         self.individual_target_line_max = pg.InfiniteLine(pos=5, angle=0, pen=pg.mkPen(color='y', width=2, style=Qt.DashLine), label='Max Target: 5.0 kg', labelOpts={'color': 'y'})
         self.individual_plot.addItem(self.individual_target_line_min)
         self.individual_plot.addItem(self.individual_target_line_max)
@@ -1296,12 +1326,8 @@ class MyInterface:
 
     def on_pyqt_close(self, event):
         """Handle PyQt window close event"""
-        self.close_plot_window()
-        event.accept()
-
-    def close_plot_window(self):
-        """Close the plot window and stop updating"""
         self.plot_active = False
+        self.plot_window_open = False  # Reset the window open flag
         
         # Stop the timer if it exists
         if hasattr(self, 'plot_timer') and self.plot_timer is not None:
@@ -1313,7 +1339,25 @@ class MyInterface:
             self.pyqt_plot_window = None
         
         if self.plot_window is not None:
-            self.plot_window.destroy()
+            self.plot_window = None
+        
+        event.accept()
+
+    def close_plot_window(self):
+        """Close the plot window and stop updating"""
+        self.plot_active = False
+        self.plot_window_open = False  # Reset the window open flag
+        
+        # Stop the timer if it exists
+        if hasattr(self, 'plot_timer') and self.plot_timer is not None:
+            self.plot_timer.stop()
+        
+        # Close the PyQt window if it exists
+        if self.pyqt_plot_window is not None:
+            self.pyqt_plot_window.close()
+            self.pyqt_plot_window = None
+        
+        if self.plot_window is not None:
             self.plot_window = None
 
 
