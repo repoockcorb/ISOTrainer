@@ -1091,7 +1091,7 @@ class MyInterface:
         
         # Create a new window
         self.plot_window = QMainWindow()
-        self.plot_window.setWindowTitle("Real-time Data Plot")
+        self.plot_window.setWindowTitle("ISO Trainer - Live Channel Data")
         self.plot_window.resize(800, 600)
         
         # Create central widget and layout
@@ -1099,27 +1099,53 @@ class MyInterface:
         self.plot_window.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
         
-        # Create plot widgets
+        # Set dark background color for the window
+        central_widget.setStyleSheet("background-color: #1e1e1e;")
+        
+        # Create plot widgets with dark theme
         self.combined_plot = pg.PlotWidget()
-        self.combined_plot.setBackground('w')
-        self.combined_plot.setTitle("Combined Channel Data", color='k')
-        self.combined_plot.setLabel('left', 'Weight (kg)', color='k')
-        self.combined_plot.setLabel('bottom', 'Time (s)', color='k')
-        self.combined_plot.showGrid(x=True, y=True, alpha=0.3)
+        self.combined_plot.setBackground('#1e1e1e')
+        self.combined_plot.setTitle("Combined Data", color='white')
+        self.combined_plot.setLabel('left', 'Weight (kg)', color='white')
+        self.combined_plot.setLabel('bottom', 'Time (s)', color='white')
+        self.combined_plot.showGrid(x=True, y=True, alpha=0.2)
+        self.combined_plot.getAxis('left').setTextPen('white')
+        self.combined_plot.getAxis('bottom').setTextPen('white')
         
         self.individual_plot = pg.PlotWidget()
-        self.individual_plot.setBackground('w')
-        self.individual_plot.setTitle("Individual Channel Data", color='k')
-        self.individual_plot.setLabel('left', 'Weight (kg)', color='k')
-        self.individual_plot.setLabel('bottom', 'Time (s)', color='k')
-        self.individual_plot.showGrid(x=True, y=True, alpha=0.3)
+        self.individual_plot.setBackground('#1e1e1e')
+        self.individual_plot.setTitle("Channel 0 and 1", color='white')
+        self.individual_plot.setLabel('left', 'Weight (kg)', color='white')
+        self.individual_plot.setLabel('bottom', 'Time (s)', color='white')
+        self.individual_plot.showGrid(x=True, y=True, alpha=0.2)
+        self.individual_plot.getAxis('left').setTextPen('white')
+        self.individual_plot.getAxis('bottom').setTextPen('white')
         
         # Add plots to layout with size ratio 2:1
         layout.addWidget(self.combined_plot, stretch=2)
         layout.addWidget(self.individual_plot, stretch=1)
         
-        # Create control panel
+        # Create control panel with dark theme
         control_panel = QWidget()
+        control_panel.setStyleSheet("""
+            QWidget {
+                background-color: #1e1e1e;
+                color: white;
+            }
+            QLineEdit {
+                background-color: #2d2d2d;
+                color: white;
+                border: 1px solid #3d3d3d;
+                padding: 2px;
+            }
+            QGroupBox {
+                border: 1px solid #3d3d3d;
+                margin-top: 0.5em;
+            }
+            QGroupBox::title {
+                color: white;
+            }
+        """)
         control_layout = QHBoxLayout(control_panel)
         
         # Target value controls
@@ -1155,20 +1181,20 @@ class MyInterface:
         self.plot_data_ch1 = []
         self.plot_timestamps = []
         
-        # Create curves for each channel
+        # Create curves for each channel with new colors
         self.curve_combined = self.combined_plot.plot(pen=pg.mkPen(color='g', width=2), name='Combined')
         self.curve_ch0 = self.individual_plot.plot(pen=pg.mkPen(color='b', width=2), name='Channel 0')
         self.curve_ch1 = self.individual_plot.plot(pen=pg.mkPen(color='r', width=2), name='Channel 1')
         
-        # Add target lines to both plots
-        self.target_line_min = pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen(color='y', width=2, style=Qt.DashLine), label='Min Target: 0.0 kg')
-        self.target_line_max = pg.InfiniteLine(pos=10, angle=0, pen=pg.mkPen(color='m', width=2, style=Qt.DashLine), label='Max Target: 10.0 kg')
+        # Add target lines to both plots with yellow color
+        self.target_line_min = pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen(color='y', width=2, style=Qt.DashLine), label='Min Target: 0.0 kg', labelOpts={'color': 'y'})
+        self.target_line_max = pg.InfiniteLine(pos=10, angle=0, pen=pg.mkPen(color='y', width=2, style=Qt.DashLine), label='Max Target: 10.0 kg', labelOpts={'color': 'y'})
         self.combined_plot.addItem(self.target_line_min)
         self.combined_plot.addItem(self.target_line_max)
         
         # Add target lines to individual plot
-        self.individual_target_line_min = pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen(color='y', width=2, style=Qt.DashLine), label='Min Target: 0.0 kg')
-        self.individual_target_line_max = pg.InfiniteLine(pos=5, angle=0, pen=pg.mkPen(color='m', width=2, style=Qt.DashLine), label='Max Target: 5.0 kg')
+        self.individual_target_line_min = pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen(color='y', width=2, style=Qt.DashLine), label='Min Target: 0.0 kg', labelOpts={'color': 'y'})
+        self.individual_target_line_max = pg.InfiniteLine(pos=5, angle=0, pen=pg.mkPen(color='y', width=2, style=Qt.DashLine), label='Max Target: 5.0 kg', labelOpts={'color': 'y'})
         self.individual_plot.addItem(self.individual_target_line_min)
         self.individual_plot.addItem(self.individual_target_line_max)
         
